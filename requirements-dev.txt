@@ -1,0 +1,21 @@
+# AutoTest-Agent: 开发环境额外依赖
+# 使用 pip install -r requirements-dev.txt 安装
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+coverage>=7.4.0
+
+# Code Quality
+ruff>=0.2.0
+black>=24.0.0
+mypy>=1.8.0
+pylint>=3.0.0
+
+# Dev Tools
+ipython>=8.20.0
+pre-commit>=3.6.0
+
+# Import the base requirements
+-r requirements.txt

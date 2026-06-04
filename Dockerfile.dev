@@ -1,0 +1,53 @@
+# AutoTest-Agent Development Dockerfile
+# 基于国内镜像源构建，适配国内网络环境
+
+FROM python:3.11-slim
+
+LABEL org.opencontainers.image.description="AutoTest-Agent Development Container"
+LABEL org.opencontainers.image.source="https://github.com/MasterDecade/AutoTest-Agent"
+
+# 环境变量 - 使用国内镜像源加速
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_NO_CACHE_DIR=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 替换 Debian 源为国内镜像
+RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources && \
+    sed -i 's/security.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update -o Acquire::http::No-Cache=True && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        git \
+        gcc \
+        g++ \
+        make \
+        cmake \
+        postgresql-client \
+        redis-tools \
+        libpq-dev \
+        ca-certificates \
+        vim \
+        && rm -rf /var/lib/apt/lists/*
+
+# 配置 pip 国内源
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip install --upgrade pip setuptools wheel
+
+# 安装 Python 开发依赖
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-dev.txt
+
+# 安装 Node.js (用于前端开发)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    npm config set registry https://registry.npmmirror.com && \
+    rm -rf /var/lib/apt/lists/*
+
+# 设置工作目录
+WORKDIR /workspace
+
+# 默认命令 - 保持容器运行
+CMD ["bash"]

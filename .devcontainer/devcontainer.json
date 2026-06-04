@@ -1,0 +1,49 @@
+{
+	"name": "AutoTest-Agent Dev Container",
+	"dockerComposeFile": "../docker-compose.dev.yml",
+	"service": "devcontainer",
+	"workspaceFolder": "/workspace",
+
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"ms-python.black-formatter",
+				"charliermarsh.ruff",
+				"ms-azuretools.vscode-docker",
+				"dbaeumer.vscode-eslint",
+				"esbenp.prettier-vscode",
+				"eamodio.gitlens",
+				"ms-vscode.makefile-tools",
+				"redhat.vscode-yaml"
+			],
+			"settings": {
+				"python.defaultInterpreterPath": "/usr/local/bin/python",
+				"python.linting.enabled": true,
+				"editor.formatOnSave": true,
+				"editor.rulers": [100],
+				"files.exclude": {
+					"**/__pycache__": true,
+					"**/.pytest_cache": true,
+					"**/.ruff_cache": true
+				}
+			}
+		}
+	},
+
+	"forwardPorts": [8080, 3000, 5432, 6379],
+	"portsAttributes": {
+		"8080": { "label": "FastAPI" },
+		"3000": { "label": "Frontend Dev" },
+		"5432": { "label": "PostgreSQL" },
+		"6379": { "label": "Redis" }
+	},
+
+	"postCreateCommand": "pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -e '.[dev]' && cd frontend && npm install --registry=https://registry.npmmirror.com",
+
+	"remoteUser": "vscode",
+	"mounts": [
+		"source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+	]
+}
