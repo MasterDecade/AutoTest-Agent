@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import router as api_router
+from src.api.routes.agent import router as agent_router
 from src.api.routes.analysis import router as analysis_router
 from src.api.routes.documents import router as documents_router
 from src.api.routes.languages import router as languages_router
@@ -45,6 +46,7 @@ app = FastAPI(
 
 # Mount API routes
 app.include_router(api_router)
+app.include_router(agent_router)
 app.include_router(llm_router)
 app.include_router(documents_router)
 app.include_router(analysis_router)
