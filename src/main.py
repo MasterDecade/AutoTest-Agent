@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import router as api_router
+from src.api.routes.llm import router as llm_router
 from src.common.config import get_settings
 from src.common.logger import setup_logger
 
@@ -38,6 +39,7 @@ app = FastAPI(
 
 # Mount API routes
 app.include_router(api_router)
+app.include_router(llm_router)
 
 # CORS Middleware
 app.add_middleware(
