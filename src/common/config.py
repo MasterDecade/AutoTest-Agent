@@ -89,7 +89,7 @@ class Settings(BaseSettings):
 
     # ===== Logging =====
     log_level: str = Field(default="INFO")
-    log_file: Optional[str] = Field(default="/var/log/autotest-agent/app.log")
+    log_file: Optional[str] = Field(default="logs/app.log")
 
     @property
     def is_development(self) -> bool:
