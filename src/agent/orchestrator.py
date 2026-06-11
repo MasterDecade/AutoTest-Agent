@@ -1,11 +1,13 @@
 """Agent Orchestrator — connects all modules into a complete auto-test pipeline.
 
 Pipeline: analyze → plan → approve → test → score
+
+Uses factory pattern for analyzer selection to reduce coupling.
 """
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from src.agent.workflow import WorkflowEngine, WorkflowStage, WorkflowStatus
 
@@ -27,6 +29,67 @@ class OrchestratorResult:
     score: Optional[dict] = None
 
     errors: list[str] = field(default_factory=list)
+
+
+class AnalyzerFactory:
+    """Factory for creating language-specific analyzers.
+
+    Decouples analyzer instantiation from the orchestrator.
+    Supports registration of custom analyzers.
+    """
+
+    _analyzers: dict[str, Callable] = {}
+
+    @classmethod
+    def register(cls, language: str, factory_func: Callable):
+        """Register an analyzer factory for a language.
+
+        Args:
+            language: Language identifier (e.g., 'python', 'cpp').
+            factory_func: Callable that returns an analyzer instance.
+        """
+        cls._analyzers[language.lower()] = factory_func
+        logger.info(f"Registered analyzer for language: {language}")
+
+    @classmethod
+    def create(cls, language: str):
+        """Create an analyzer for the specified language.
+
+        Args:
+            language: Language identifier.
+
+        Returns:
+            Analyzer instance.
+
+        Raises:
+            ValueError: If no analyzer is registered for the language.
+        """
+        lang = language.lower()
+        if lang not in cls._analyzers:
+            raise ValueError(f"No analyzer registered for language: {language}")
+        return cls._analyzers[lang]()
+
+    @classmethod
+    def supported_languages(cls) -> list[str]:
+        """Get list of supported languages."""
+        return list(cls._analyzers.keys())
+
+
+# Register default analyzers
+def _register_default_analyzers():
+    """Register built-in analyzers."""
+    from src.analyzer.parsers.c_cpp_parser import CAnalyzer, CCPPAnalyzer
+    from src.analyzer.parsers.java_parser import JavaAnalyzer
+    from src.analyzer.parsers.python_parser import PythonAnalyzer
+
+    AnalyzerFactory.register("python", PythonAnalyzer)
+    AnalyzerFactory.register("cpp", CCPPAnalyzer)
+    AnalyzerFactory.register("c++", CCPPAnalyzer)
+    AnalyzerFactory.register("c", CAnalyzer)
+    AnalyzerFactory.register("java", JavaAnalyzer)
+
+
+_register_default_analyzers()
 
 
 class AgentOrchestrator:
@@ -51,7 +114,7 @@ class AgentOrchestrator:
         language: str = "",
         num_test_cases: int = 5,
         auto_approve: bool = False,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable] = None,
     ) -> OrchestratorResult:
         """Run the complete auto-test pipeline.
 
@@ -148,7 +211,7 @@ class AgentOrchestrator:
         code: str,
         language: str,
         num_test_cases: int = 5,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable] = None,
     ) -> OrchestratorResult:
         """Continue pipeline after manual review approval.
 
@@ -188,19 +251,22 @@ class AgentOrchestrator:
     # === Private Methods ===
 
     async def _run_analysis(self, code: str, language: str) -> dict:
-        """Run static code analysis."""
-        from src.analyzer.parsers.c_cpp_parser import CAnalyzer, CCPPAnalyzer
-        from src.analyzer.parsers.java_parser import JavaAnalyzer
-        from src.analyzer.parsers.python_parser import PythonAnalyzer
+        """Run static code analysis using factory-created analyzer.
 
-        analyzers = {
-            "python": PythonAnalyzer(),
-            "cpp": CCPPAnalyzer(),
-            "c": CAnalyzer(),
-            "java": JavaAnalyzer(),
-        }
+        Args:
+            code: Source code to analyze.
+            language: Programming language.
 
-        analyzer = analyzers.get(language, PythonAnalyzer())
+        Returns:
+            Analysis result as dictionary.
+        """
+        try:
+            analyzer = AnalyzerFactory.create(language)
+        except ValueError:
+            logger.warning(f"Unsupported language '{language}', using Python analyzer")
+            from src.analyzer.parsers.python_parser import PythonAnalyzer
+            analyzer = PythonAnalyzer()
+
         result = await analyzer.analyze_with_llm(
             code=code,
             provider_manager=self.provider_manager,
@@ -269,7 +335,9 @@ class AgentOrchestrator:
             "dimension_weights": score.dimension_weights,
         }
 
-    def _emit_progress(self, callback, stage: str, status: str, data: dict = None):
+    def _emit_progress(
+        self, callback: Optional[Callable], stage: str, status: str, data: dict = None
+    ):
         """Send progress update to callback if provided."""
         if callback:
             try:
