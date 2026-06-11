@@ -1,13 +1,17 @@
 version: '3.8'
 
 # 开发环境 Docker Compose 配置
-# 使用国内镜像源加速
+# 使用国内镜像源加速，适配中国大陆网络环境
 
 services:
   devcontainer:
     build:
       context: .
       dockerfile: Dockerfile.dev
+      args:
+        # 构建时传递镜像源参数
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
     container_name: autotest-agent-dev
     hostname: dev-container
     volumes:
@@ -18,6 +22,9 @@ services:
       - DATABASE_URL=postgresql://autotest:autotest_dev@postgres:5432/autotest_dev
       - REDIS_URL=redis://redis:6379/0
       - PYTHONUNBUFFERED=1
+      - PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+      - NPM_CONFIG_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}
+      - DOCKER_MIRROR=${DOCKER_MIRROR:-registry.cn-hangzhou.aliyuncs.com}
     ports:
       - "8080:8080"   # FastAPI
       - "3000:3000"   # Frontend Dev Server
@@ -31,7 +38,7 @@ services:
     command: sleep infinity
 
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     container_name: autotest-dev-postgres
     environment:
       POSTGRES_DB: autotest_dev
@@ -50,7 +57,7 @@ services:
       - dev-network
 
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-redis:7-alpine}
     container_name: autotest-dev-redis
     volumes:
       - redis_dev_data:/data

@@ -151,10 +151,14 @@ run_unit_tests() {
         coverage_flag="--cov=src --cov-report=term-missing --cov-report=html:coverage"
     fi
 
+    # Use configured mirror or default to Tsinghua
+    local pip_mirror="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+    log_info "Using pip mirror: $pip_mirror"
+
     log_info "Executing unit tests in isolated container..."
     docker compose -f "$COMPOSE_FILE_DEV" run --rm devcontainer bash -c "
         cd /workspace && \
-        pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r requirements-dev.txt && \
+        pip install --index-url ${pip_mirror} -r requirements-dev.txt && \
         pytest tests/unit/ $verbose_flag $coverage_flag -W ignore::DeprecationWarning
     "
 
@@ -174,10 +178,14 @@ run_integration_tests() {
         coverage_flag="--cov=src --cov-report=term-missing --cov-append"
     fi
 
+    # Use configured mirror or default to Tsinghua
+    local pip_mirror="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+    log_info "Using pip mirror: $pip_mirror"
+
     log_info "Executing integration tests in isolated container..."
     docker compose -f "$COMPOSE_FILE_DEV" run --rm devcontainer bash -c "
         cd /workspace && \
-        pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r requirements-dev.txt && \
+        pip install --index-url ${pip_mirror} -r requirements-dev.txt && \
         pytest tests/integration/ $verbose_flag $coverage_flag -W ignore::DeprecationWarning
     "
 
@@ -192,10 +200,14 @@ run_sandbox_tests() {
         verbose_flag="-v"
     fi
 
+    # Use configured mirror or default to Tsinghua
+    local pip_mirror="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+    log_info "Using pip mirror: $pip_mirror"
+
     log_info "Testing sandbox isolation mechanisms..."
     docker compose -f "$COMPOSE_FILE_DEV" run --rm devcontainer bash -c "
         cd /workspace && \
-        pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r requirements-dev.txt && \
+        pip install --index-url ${pip_mirror} -r requirements-dev.txt && \
         pytest tests/sandbox/ $verbose_flag -W ignore::DeprecationWarning
     "
 

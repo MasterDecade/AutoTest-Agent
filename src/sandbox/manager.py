@@ -239,52 +239,137 @@ class SandboxManager:
     async def _ensure_image(self, client: docker.DockerClient, image: str) -> None:
         """Ensure Docker image is available (pull if needed).
 
+        This method implements a multi-tier fallback strategy for China network:
+        1. Check local cache
+        2. Pull from official registry
+        3. Try configured mirror registries (Alibaba, USTC, Tencent, NetEase)
+        4. Try alternative mirrors in sequence
+
         Args:
             client: Docker client.
             image: Image name to ensure.
+
+        Raises:
+            RuntimeError: If all pull attempts fail.
         """
         loop = asyncio.get_event_loop()
 
+        # Step 1: Check if image exists locally
         try:
             await loop.run_in_executor(None, client.images.get, image)
-            logger.debug(f"Image '{image}' already present")
+            logger.debug(f"Image '{image}' already present locally")
+            return
         except ImageNotFound:
-            logger.info(f"Pulling image '{image}'...")
-            try:
-                await loop.run_in_executor(None, client.images.pull, image)
-            except Exception as e:
-                # Try mirror if configured
-                if self.mirror:
-                    mirror_image = self._mirror_image(image)
-                    try:
-                        logger.info(f"Trying mirror for '{image}': {mirror_image}")
-                        await loop.run_in_executor(None, client.images.pull, mirror_image)
-                        if image != mirror_image:
-                            await loop.run_in_executor(
-                                None,
-                                lambda: client.images.get(mirror_image).tag(image),
-                            )
-                        logger.info(f"Pulled '{image}' via mirror")
-                        return
-                    except Exception:
-                        pass
-                raise RuntimeError(f"Failed to pull image '{image}': {e}")
+            logger.info(f"Image '{image}' not found locally, will pull...")
 
-    def _mirror_image(self, image: str) -> str:
-        """Convert image name to use mirror registry.
+        # Step 2: Define mirror strategy
+        mirrors_to_try = []
+
+        # Add configured mirror if set
+        if self.mirror:
+            mirrors_to_try.append(self.mirror)
+
+        # Add default China mirrors for fallback
+        default_mirrors = [
+            "registry.cn-hangzhou.aliyuncs.com",
+            "docker.mirrors.ustc.edu.cn",
+            "mirror.ccs.tencentyun.com",
+            "hub-mirror.c.163.com",
+        ]
+
+        # Add mirrors that aren't already in the list
+        for mirror in default_mirrors:
+            if mirror not in mirrors_to_try:
+                mirrors_to_try.append(mirror)
+
+        # Step 3: Try pulling with mirrors
+        last_error = None
+
+        # First, try direct pull (might work if Docker daemon has mirror configured)
+        try:
+            logger.info(f"Attempting direct pull of '{image}'...")
+            await loop.run_in_executor(None, client.images.pull, image)
+            logger.info(f"Successfully pulled '{image}' directly")
+            return
+        except Exception as e:
+            logger.warning(f"Direct pull failed: {e}")
+            last_error = e
+
+        # Then try each mirror in sequence
+        for mirror in mirrors_to_try:
+            mirror_image = self._mirror_image(image, mirror)
+            try:
+                logger.info(f"Trying mirror '{mirror}' for '{image}': {mirror_image}")
+                await loop.run_in_executor(None, client.images.pull, mirror_image)
+
+                # Tag the mirror image with the original name
+                if image != mirror_image:
+                    mirror_img_obj = await loop.run_in_executor(
+                        None, client.images.get, mirror_image
+                    )
+                    await loop.run_in_executor(
+                        None,
+                        lambda: mirror_img_obj.tag(image),
+                    )
+                    logger.info(f"Tagged '{mirror_image}' as '{image}'")
+
+                logger.info(f"Successfully pulled '{image}' via mirror '{mirror}'")
+                return
+
+            except Exception as e:
+                logger.warning(f"Mirror '{mirror}' failed: {e}")
+                last_error = e
+                continue
+
+        # All attempts failed
+        error_msg = (
+            f"Failed to pull image '{image}'. Tried:\n"
+            f"  - Direct pull\n"
+        )
+        if self.mirror:
+            error_msg += f"  - Configured mirror: {self.mirror}\n"
+        error_msg += f"  - Default mirrors: {', '.join(default_mirrors)}\n"
+        error_msg += f"\nLast error: {last_error}\n\n"
+        error_msg += (
+            "Solutions:\n"
+            "  1. Configure Docker daemon with registry mirrors in /etc/docker/daemon.json\n"
+            "  2. Run 'bash scripts/configure_mirrors.sh' to auto-configure\n"
+            "  3. Manually pull the image: docker pull <mirror>/<image>\n"
+            "  4. Check network connectivity and firewall settings"
+        )
+
+        raise RuntimeError(error_msg)
+
+    def _mirror_image(self, image: str, mirror: str = "") -> str:
+        """Convert image name to use a specific mirror registry.
+
+        This method transforms Docker image names to use mirror registries.
+        For example:
+          - python:3.11-slim → registry.cn-hangzhou.aliyuncs.com/python:3.11-slim
+          - library/nginx:latest → registry.cn-hangzhou.aliyuncs.com/library/nginx:latest
 
         Args:
-            image: Original image name.
+            image: Original image name (e.g., "python:3.11-slim").
+            mirror: Mirror registry URL. If empty, uses self.mirror.
 
         Returns:
             Mirror-prefixed image name.
         """
-        if not self.mirror:
+        target_mirror = mirror or self.mirror
+        if not target_mirror:
             return image
+
+        # Handle images with explicit registry (e.g., docker.io/library/python:3.11)
         if "/" in image:
             parts = image.split("/", 1)
-            return f"{self.mirror}/{parts[-1]}"
-        return f"{self.mirror}/{image}"
+            # If already has a registry (contains dot), replace it
+            if "." in parts[0]:
+                return f"{target_mirror}/{parts[-1]}"
+            # Otherwise just prepend mirror
+            return f"{target_mirror}/{image}"
+
+        # Simple image name (e.g., "python:3.11-slim")
+        return f"{target_mirror}/{image}"
 
     async def _write_code_to_container_async(self, container, config: SandboxConfig) -> None:
         """Write source code and test code into the container securely using tar.
