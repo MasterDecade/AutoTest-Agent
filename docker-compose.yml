@@ -1,16 +1,21 @@
 version: '3.8'
 
 # Production Docker Compose for AutoTest-Agent
-# 使用国内镜像加速器
+# Optimized for domestic network environments (Chinese mirror registries)
+#
+# Usage:
+#   docker compose up -d              # Start all services
+#   docker compose build --no-cache   # Rebuild API image
+#   docker compose logs -f api        # Tail API logs
 
 services:
-  # PostgreSQL Database
+  # ===== PostgreSQL Database =====
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     container_name: autotest-postgres
     environment:
-      POSTGRES_DB: autotest
-      POSTGRES_USER: autotest
+      POSTGRES_DB: ${POSTGRES_DB:-autotest}
+      POSTGRES_USER: ${POSTGRES_USER:-autotest}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-autotest_pass}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -18,16 +23,17 @@ services:
       - "${DB_PORT:-5432}:5432"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U autotest -d autotest"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-autotest} -d ${POSTGRES_DB:-autotest}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     networks:
       - autotest-network
 
-  # Redis
+  # ===== Redis Cache / Message Broker =====
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-redis:7-alpine}
     container_name: autotest-redis
     volumes:
       - redis_data:/data
@@ -42,29 +48,44 @@ services:
     networks:
       - autotest-network
 
-  # AutoTest-Agent API Server
+  # ===== AutoTest-Agent API Server =====
   api:
-    # Build from Dockerfile at project root
     build:
       context: .
       dockerfile: Dockerfile
       args:
         - PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
     container_name: autotest-api
+    image: ${API_IMAGE:-autotest-agent:latest}
     environment:
-      - DATABASE_URL=postgresql://autotest:${DB_PASSWORD:-autotest_pass}@postgres:5432/autotest
+      # Database
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autotest}:${DB_PASSWORD:-autotest_pass}@postgres:5432/${POSTGRES_DB:-autotest}
+      # Redis / Celery
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # LLM
       - LLM_PROVIDERS=${LLM_PROVIDERS}
+      # Server
       - API_HOST=0.0.0.0
       - API_PORT=8080
+      - DEBUG=${DEBUG:-false}
+      # Docker Sandbox
       - DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock}
       - DOCKER_MIRROR=${DOCKER_MIRROR:-registry.cn-hangzhou.aliyuncs.com}
+      - SANDBOX_MAX_CPU=${SANDBOX_MAX_CPU:-2}
+      - SANDBOX_MAX_MEMORY=${SANDBOX_MAX_MEMORY:-2g}
+      - SANDBOX_TIMEOUT=${SANDBOX_TIMEOUT:-300}
+      # Concurrency
+      - MAX_CONCURRENCY=${MAX_CONCURRENCY:-10}
+      # Package registries (domestic mirrors)
       - PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
       - NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}
+      # Security
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - API_KEY_ENCRYPTION_KEY=${API_KEY_ENCRYPTION_KEY:-change-me-in-production}
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     ports:
       - "${API_PORT:-8080}:8080"
     volumes:
@@ -76,18 +97,25 @@ services:
       redis:
         condition: service_started
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     networks:
       - autotest-network
 
-  # Celery Worker
+  # ===== Celery Worker =====
   worker:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: autotest-worker
-    command: celery -A src.scheduler.celery_app worker --loglevel=info --concurrency=${MAX_CONCURRENCY:-4}
+    image: ${WORKER_IMAGE:-autotest-agent:latest}
+    command: celery -A src.scheduler.celery_app worker --loglevel=${LOG_LEVEL:-info} --concurrency=${MAX_CONCURRENCY:-4}
     environment:
-      - DATABASE_URL=postgresql://autotest:${DB_PASSWORD:-autotest_pass}@postgres:5432/autotest
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autotest}:${DB_PASSWORD:-autotest_pass}@postgres:5432/${POSTGRES_DB:-autotest}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
@@ -105,7 +133,7 @@ services:
         condition: service_started
     restart: unless-stopped
     deploy:
-      replicas: 1
+      replicas: ${WORKER_REPLICAS:-1}
       resources:
         limits:
           cpus: '${WORKER_CPU_LIMIT:-4}'
@@ -116,10 +144,13 @@ services:
 volumes:
   postgres_data:
     name: autotest_postgres_data
+    driver: local
   redis_data:
     name: autotest_redis_data
+    driver: local
   app_data:
     name: autotest_app_data
+    driver: local
 
 networks:
   autotest-network:
