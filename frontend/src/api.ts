@@ -45,4 +45,21 @@ export const getBatchStatus = () => api.get('/batch/status');
 // Health
 export const healthCheck = () => api.get('/health');
 
+// Projects
+export const createProject = (data: { name: string; description?: string; language?: string }) =>
+  api.post('/projects', data);
+
+export const getProjects = () => api.get('/projects');
+
+export const getProject = (id: string) => api.get(`/projects/${id}`);
+
+// Submissions
+export const uploadSubmission = (projectId: string, formData: FormData) =>
+  api.post(`/projects/${projectId}/submissions/upload`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+
+export const getSubmissions = (projectId: string) =>
+  api.get(`/projects/${projectId}/submissions`);
+
 export default api;

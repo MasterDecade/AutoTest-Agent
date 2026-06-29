@@ -34,6 +34,8 @@ class SandboxConfig:
     network_disabled: bool = True
     environment: dict = field(default_factory=dict)
     working_dir: str = "/tmp/autotest"
+    # Multi-file support: relative_path -> content mapping
+    files: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -219,11 +221,14 @@ class SandboxManager:
     def _default_image(self, language: str) -> str:
         """Get default Docker image for a language.
 
+        Images are prefixed with DaoCloud mirror for China network compatibility.
+        The _ensure_image method will handle multi-tier fallback if this mirror fails.
+
         Args:
             language: Language identifier.
 
         Returns:
-            Docker image name.
+            Docker image name with mirror prefix.
         """
         mapping = {
             "python": "python:3.11-slim",
@@ -234,7 +239,12 @@ class SandboxManager:
             "go": "golang:1.22-alpine",
             "rust": "rust:1.75-slim",
         }
-        return mapping.get(language, "python:3.11-slim")
+        base_image = mapping.get(language, "python:3.11-slim")
+
+        # If mirror is configured, prepend it to the image name
+        if self.mirror:
+            return self._mirror_image(base_image, self.mirror)
+        return base_image
 
     async def _ensure_image(self, client: docker.DockerClient, image: str) -> None:
         """Ensure Docker image is available (pull if needed).
@@ -269,12 +279,13 @@ class SandboxManager:
         if self.mirror:
             mirrors_to_try.append(self.mirror)
 
-        # Add default China mirrors for fallback
+        # Add default China mirrors for fallback (priority order for 2026+)
         default_mirrors = [
-            "registry.cn-hangzhou.aliyuncs.com",
-            "docker.mirrors.ustc.edu.cn",
-            "mirror.ccs.tencentyun.com",
-            "hub-mirror.c.163.com",
+            "docker.m.daocloud.io",           # DaoCloud (most stable, recommended)
+            "dockerproxy.com",                # International proxy
+            "registry.cn-hangzhou.aliyuncs.com",  # Alibaba Cloud (legacy)
+            "docker.mirrors.ustc.edu.cn",     # USTC (education network)
+            "mirror.ccs.tencentyun.com",      # Tencent Cloud
         ]
 
         # Add mirrors that aren't already in the list
@@ -369,17 +380,31 @@ class SandboxManager:
             return f"{target_mirror}/{image}"
 
         # Simple image name (e.g., "python:3.11-slim")
+        # For official Docker Hub images, add /library/ prefix
+        if ":" in image:
+            image_name = image.split(":")[0]
+            tag = image.split(":")[1]
+        else:
+            image_name = image
+            tag = "latest"
+        
+        # Official Docker Hub images need /library/ prefix
+        official_images = ["python", "gcc", "openjdk", "golang", "rust", "node", "ruby", "java", "postgres", "redis", "nginx"]
+        if image_name in official_images:
+            return f"{target_mirror}/library/{image_name}:{tag}"
+        
         return f"{target_mirror}/{image}"
 
     async def _write_code_to_container_async(self, container, config: SandboxConfig) -> None:
         """Write source code and test code into the container securely using tar.
 
-        This method uses Docker's put_archive API to securely write files,
-        avoiding shell injection vulnerabilities of echo-based approaches.
+        Supports both single-file mode (code/test_code) and multi-file mode (files dict).
+        In multi-file mode, the files dict maps relative paths to file content,
+        allowing complete project directory structures to be deployed.
 
         Args:
             container: Docker container.
-            config: Sandbox configuration with code and test_code.
+            config: Sandbox configuration with code, test_code, and/or files.
         """
         import io
         import tarfile
@@ -395,42 +420,79 @@ class SandboxManager:
         }
         ext = ext_map.get(config.language, ".txt")
 
-        # Determine filenames
-        main_filename = f"main{ext}" if config.language != "java" else "Main.java"
-        test_filename = f"test_main{ext}" if config.language != "java" else "TestMain.java"
-
         # Create tar archive in memory
         tar_stream = io.BytesIO()
         with tarfile.open(fileobj=tar_stream, mode="w:") as tar:
-            # Add main code file
-            if config.code:
-                code_bytes = config.code.encode("utf-8")
-                code_info = tarfile.TarInfo(name=main_filename)
-                code_info.size = len(code_bytes)
-                code_info.mode = 0o644
-                tar.addfile(code_info, io.BytesIO(code_bytes))
+            # Multi-file mode: write files with directory structure
+            if config.files:
+                for rel_path, content in config.files.items():
+                    # Skip empty content
+                    if not content:
+                        continue
+                    content_bytes = content.encode("utf-8")
+                    tar_info = tarfile.TarInfo(name=rel_path)
+                    tar_info.size = len(content_bytes)
+                    tar_info.mode = 0o644
+                    tar.addfile(tar_info, io.BytesIO(content_bytes))
 
-            # Add test code file
-            if config.test_code:
-                test_bytes = config.test_code.encode("utf-8")
-                test_info = tarfile.TarInfo(name=test_filename)
-                test_info.size = len(test_bytes)
-                test_info.mode = 0o644
-                tar.addfile(test_info, io.BytesIO(test_bytes))
+            # Single-file mode (backward compatible)
+            else:
+                # Determine filenames
+                main_filename = f"main{ext}" if config.language != "java" else "Main.java"
+                test_filename = f"test_main{ext}" if config.language != "java" else "TestMain.java"
+
+                # Add main code file
+                if config.code:
+                    code_bytes = config.code.encode("utf-8")
+                    code_info = tarfile.TarInfo(name=main_filename)
+                    code_info.size = len(code_bytes)
+                    code_info.mode = 0o644
+                    tar.addfile(code_info, io.BytesIO(code_bytes))
+
+                # Add test code file
+                if config.test_code:
+                    test_bytes = config.test_code.encode("utf-8")
+                    test_info = tarfile.TarInfo(name=test_filename)
+                    test_info.size = len(test_bytes)
+                    test_info.mode = 0o644
+                    tar.addfile(test_info, io.BytesIO(test_bytes))
 
         tar_stream.seek(0)
 
-        # Create working directory
-        await self._exec_command(container, f"mkdir -p {config.working_dir}")
+        # Create working directory and subdirectories
+        mkdir_result = await self._exec_command(container, f"mkdir -p {config.working_dir}", workdir="/")
+        if mkdir_result.exit_code != 0:
+            raise RuntimeError(f"Failed to create working directory: {mkdir_result.stderr}")
+
+        # For multi-file projects, create necessary subdirectories
+        if config.files:
+            from pathlib import Path
+            subdirs = set()
+            for rel_path in config.files.keys():
+                parent = str(Path(rel_path).parent)
+                if parent and parent != ".":
+                    subdirs.add(parent)
+            for subdir in sorted(subdirs):
+                full_path = f"{config.working_dir}/{subdir}"
+                await self._exec_command(container, f"mkdir -p {full_path}", workdir="/")
+
+        # Small delay to ensure directories are created
+        await asyncio.sleep(0.1)
 
         # Extract tar archive into container
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: container.put_archive(config.working_dir, tar_stream),
-        )
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: container.put_archive(config.working_dir, tar_stream),
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to write code to container: {e}")
 
-        logger.debug(f"Code written to container: {main_filename}, {test_filename}")
+        if config.files:
+            logger.debug(f"Multi-file code written to container: {len(config.files)} files")
+        else:
+            logger.debug(f"Code written to container: {main_filename}, {test_filename}")
 
     async def _cleanup_container(self, container) -> None:
         """Safely remove a container.

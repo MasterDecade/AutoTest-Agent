@@ -19,7 +19,9 @@ from src.api.routes.documents import router as documents_router
 from src.api.routes.languages import router as languages_router
 from src.api.routes.batch import router as batch_router
 from src.api.routes.llm import router as llm_router
+from src.api.routes.projects import router as projects_router
 from src.api.routes.scoring import router as scoring_router
+from src.api.routes.submissions import router as submissions_router
 from src.api.routes.tests import router as tests_router
 from src.common.config import get_settings
 from src.common.database import close_db, init_db
@@ -205,6 +207,8 @@ async def general_exception_handler(request: Request, exc: Exception):
 app.include_router(api_router)
 app.include_router(agent_router)
 app.include_router(llm_router)
+app.include_router(projects_router)
+app.include_router(submissions_router)
 app.include_router(documents_router)
 app.include_router(analysis_router)
 app.include_router(languages_router)

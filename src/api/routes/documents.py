@@ -95,8 +95,13 @@ async def upload_document(
 async def analyze_text(
     text: str,
     project_context: Optional[str] = None,
+    project_id: Optional[str] = None,
 ):
-    """Analyze raw text content (without file upload)."""
+    """Analyze raw text content (without file upload).
+
+    Accepts text content via query parameter and returns LLM analysis.
+    Optionally associates the analysis with a project via project_id.
+    """
     if not text.strip():
         raise HTTPException(status_code=400, detail="Text content is empty")
 
@@ -111,7 +116,7 @@ async def analyze_text(
         analysis_result.uncertainty_notes.append(f"LLM analysis failed: {str(e)}")
 
     return DocumentAnalysisResponse(
-        file_name="inline_text",
+        file_name=project_id or "inline_text",
         text_preview=text[:1000],
         text_length=len(text),
         analysis=analysis_result,

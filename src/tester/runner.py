@@ -60,31 +60,47 @@ class TestRunner:
         language: str,
         framework: str = "",
         timeout: int = 300,
+        files: dict[str, str] | None = None,
     ) -> TestRunResult:
         """Execute generated test code in an isolated sandbox.
 
         Args:
-            code: Source code to test.
+            code: Source code to test (single-file mode).
             test_code: Generated test code to execute.
             language: Programming language.
             framework: Test framework name.
             timeout: Timeout in seconds.
+            files: Optional multi-file mapping (relative_path -> content).
 
         Returns:
             TestRunResult with execution output and pass/fail counts.
         """
         build_config = self.image_builder.get_build_config(language)
 
-        # Combine code and tests
-        combined_code = self._combine_code(code, test_code, language)
+        # Get the appropriate Docker image for the language
+        docker_image = self.sandbox._default_image(language)
 
-        config = SandboxConfig(
-            language=language,
-            code=combined_code,
-            build_command=build_config.get("build_command", ""),
-            test_command=build_config.get("test_command", ""),
-            timeout=timeout,
-        )
+        if files:
+            # Multi-file mode: use files dict directly
+            config = SandboxConfig(
+                language=language,
+                image=docker_image,
+                files=files,
+                build_command=build_config.get("build_command", ""),
+                test_command=build_config.get("test_command", ""),
+                timeout=timeout,
+            )
+        else:
+            # Single-file mode: combine code and tests
+            combined_code = self._combine_code(code, test_code, language)
+            config = SandboxConfig(
+                language=language,
+                image=docker_image,
+                code=combined_code,
+                build_command=build_config.get("build_command", ""),
+                test_command=build_config.get("test_command", ""),
+                timeout=timeout,
+            )
 
         try:
             sandbox_result = await self.sandbox.create_and_run(config)
